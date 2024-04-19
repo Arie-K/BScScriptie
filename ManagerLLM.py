@@ -33,6 +33,17 @@ class ManagerLLM:
 
         return completion.choices[0].message.content
     
+    def loadChatHistory(self):
+        #TODO: Use name and password to retrieve chats from database
+        #TODO: Add history as context to LLM using system prompt
+        return
+
+    def saveChat(self):
+        #TODO: Summarize current conversation
+        #TODO: Either add current conversation to old history, or summarize the entirety all at once
+        #TODO: Add updated history to database
+        return
+
     def convertResponse(self, response):
         fullResponse = fullResponse()
         #extract routines or long lists from response
@@ -155,12 +166,13 @@ class ManagerLLM:
             #TODO:retrieve details from database, provide quick summary of last conversation
             while True:
                 user_input = input('\033[96m \033[1m'+ "User: " + '\033[0m')
-                if "bye fitbot" in user_input.lower():
-                    self.outputResponse("Goodbye! I hope to see you again soon.")
+                response = self.generateAnswer(user_input)
+                if '<stop>' in response:
+                    response = response.split('<stop>')[0]
+                    self.outputResponse(response)
                     #TODO: save conversation
                     break
-                else:
-                    self.outputResponse(self.generateAnswer(user_input))
+                self.outputResponse(response)
 
         else: #new user
             outputDebug("New user")
