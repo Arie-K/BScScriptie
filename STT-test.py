@@ -9,6 +9,7 @@ sess = None
 full_question = ""
 audio_data = []
 stop_listening = False
+pause_listening = False
 
 def transcribeFrame(frame):
     # print(".")  # Indicate that the function is being called
@@ -18,7 +19,7 @@ def transcribeFrame(frame):
     # print(f"Received audio chunk of size: {len(audio_chunk)}")
 
 def generate_audio_chunks():
-    global audio_data
+    global audio_data, stop_listening
     while not stop_listening or audio_data:
         while audio_data:
             chunk = audio_data.pop(0)
@@ -26,9 +27,15 @@ def generate_audio_chunks():
             yield types.StreamingRecognizeRequest(audio_content=chunk)
 
 def listen_for_enter():
-    global stop_listening
-    input("Press Enter to stop listening...\n")
-    stop_listening = True
+    global stop_listening, pause_listening
+    print("Press Enter to stop listening, Space to pause listening...\n")
+    while not stop_listening:
+        inputText = input()
+        if inputText == "":
+            stop_listening = True
+        if inputText == " ":
+            print("Paused listening")
+            pause_listening = not pause_listening
 
 @inlineCallbacks
 def handle_question(session):
@@ -56,7 +63,7 @@ def handle_question(session):
 
 @inlineCallbacks
 def transcribe_streaming():
-    global audio_data, stop_listening
+    global audio_data
     try:
         client = speech.SpeechClient.from_service_account_file("/home/arie/UniLeiden/gcloudkey/scriptiellm-440971c004cf.json")
 
@@ -80,9 +87,11 @@ def transcribe_streaming():
 
         print("Starting streaming recognition...")
 
+        global sess
+
         for response in responses:
             for result in response.results:
-                if result.is_final:
+                if result.is_final and not pause_listening:
                     transcription = result.alternatives[0].transcript
                     print("Final Transcription: ", transcription)
                     with open("transcription.txt", "a") as f:
