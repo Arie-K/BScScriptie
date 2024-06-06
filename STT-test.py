@@ -1,10 +1,9 @@
 from autobahn.twisted.component import Component, run
-from twisted.internet.defer import inlineCallbacks, returnValue
+from twisted.internet.defer import inlineCallbacks
 from twisted.internet import reactor
 from twisted.internet.task import deferLater
 from google.cloud import speech
 from google.cloud.speech_v1 import types
-import threading
 
 sess = None
 full_question = ""
@@ -61,12 +60,15 @@ def transcribe_streaming():
     try:
         client = speech.SpeechClient.from_service_account_file("/home/arie/UniLeiden/gcloudkey/scriptiellm-440971c004cf.json")
 
+        speech_contexts = [speech.SpeechContext(phrases=["fitbot", "push", "pull", "legs", "workout", "routine", "exercise", "gym", "fitness", "strength", "training", "muscle", "body", "weight", "lifting", "squat", "deadlift", "bench press", "barbell", "dumbbell", "kettlebell", "cardio", "calories", "burn", "fat", "protein", "carbs", "diet", "nutrition", "meal", "plan", "rest", "recovery", "sleep", "hydrate", "water", "supplement", "vitamin", "mineral", "protein shake", "pre workout", "post workout", "warm up", "cool down", "stretch", "flexibility", "mobility", "injury", "pain", "soreness", "form", "technique", "spotter", "personal trainer", "coach", "motivation", "inspiration", "goal", "progress", "success", "failure", "discipline", "consistency"])]
+
         config = speech.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
             sample_rate_hertz=16000,
             language_code="en-US",
             enable_automatic_punctuation=True,
-            model="video"
+            model="video",
+            speech_contexts=speech_contexts
         )
         streaming_config = speech.StreamingRecognitionConfig(
             config=config,
@@ -85,8 +87,8 @@ def transcribe_streaming():
                     print("Final Transcription: ", transcription)
                     with open("transcription.txt", "a") as f:
                         f.write(transcription + "\n")
-                else:
-                    print("Interim Transcription: ", result.alternatives[0].transcript)
+                # else:
+                #     print("Interim Transcription: ", result.alternatives[0].transcript)
 
     except Exception as e:
         print(f"Error during streaming recognition: {e}")
@@ -107,7 +109,7 @@ wamp = Component(
         "serializers": ["msgpack"],
         "max_retries": 0
     }],
-    realm="rie.6660665c29fca0a53366d9ea",
+    realm="rie.66619f9229fca0a53366e17d",
 )
 
 wamp.on_join(main)
