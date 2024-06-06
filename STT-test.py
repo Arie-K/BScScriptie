@@ -49,6 +49,9 @@ def handle_question(session):
     yield session.subscribe(transcribeFrame, "rom.sensor.hearing.stream")
     yield session.call("rom.sensor.hearing.stream")
 
+    session.call("rie.dialogue.say", text="test 1 2 3 4 asd asd asd ss s sd sf as fas fas ", lang="en")
+    print("klaar")
+
     # Start the transcription thread
     reactor.callInThread(transcribe_streaming)
 
@@ -86,8 +89,6 @@ def transcribe_streaming():
         responses = client.streaming_recognize(config=streaming_config, requests=streaming_requests)
 
         print("Starting streaming recognition...")
-
-        global sess
 
         for response in responses:
             for result in response.results:
