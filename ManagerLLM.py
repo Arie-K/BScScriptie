@@ -1,5 +1,9 @@
 import sqlite3
 from openai import OpenAI
+from twisted.internet.task import deferLater
+from twisted.internet import reactor, defer
+from twisted.internet.defer import inlineCallbacks
+
 client = OpenAI()
 
 class fullResponse:
@@ -21,11 +25,14 @@ class ManagerLLM:
         self.connectionDB = sqlite3.connect('userHistroy.db')
         self.cursorDB = self.connectionDB.cursor()
         self.cursorDB.execute("SELECT * FROM chatSummaries")
+        self.listening = True
+        self.transcription = ""
+        self.transcriptionComplete = False
 
         rows = self.cursorDB.fetchall()
 
-        for row in rows:
-            print(row)
+        # for row in rows:
+        #     print(row)
 
 
     def addMessageToLog(self, role, content):
@@ -77,13 +84,36 @@ class ManagerLLM:
 
     def convertResponse(self, response):
         fullResponse = fullResponse()
-        #extract routines or long lists from response
+        #TODO: extract routines or long lists from response
         fullResponse.spokenResponse = response
         return fullResponse
     
     def outputResponse(self, response):
         print('\033[92m \033[1m' + "FitBot: " + '\033[0m', response)
         #TODO: output response to audio stream
+
+    def obtainUserInput(self):
+        print("obtainUserInput")
+        self.listening = True
+        return self._wait_for_transcription()
+
+    def _wait_for_transcription(self):
+        d = defer.Deferred()
+        self._check_transcription(d)
+        return d
+
+    def _check_transcription(self, d):
+        # print("checkTranscription: ", self.transcriptionComplete, self.transcription)
+        if self.transcriptionComplete:
+            print("complete")
+            self.listening = False
+            userInput = self.transcription
+            self.transcription = ""
+            self.transcriptionComplete = False
+            d.callback(userInput)
+        else:
+            # print("not complete")
+            reactor.callLater(0.1, self._check_transcription, d)
 
     def isAffirmative(self, inputText):
         completion = client.chat.completions.create(
@@ -121,35 +151,52 @@ class ManagerLLM:
             return completion.choices[0].message.content
         else:
             return False
+        
+    def processTranscription(self, transcription):
+        #TODO: combine multiple transcriptions into one until sentence complete
+        self.transcription += " " + transcription
+        self.transcriptionComplete = True
+        #check if transcription is complete
+        #if complete, generate response
 
+    @inlineCallbacks
     def mainLoop(self):
         #TODO: Use LLM to determine wether sentence is complete
-
-        #TODO: Use keyword recogniction of NAO to start conversation
-        user_input = input('\033[96m \033[1m'+ "User: " + '\033[0m')
-        while user_input.lower() != "hello fitbot":
-            user_input = input('\033[96m \033[1m'+ "User: " + '\033[0m')
+        # while self.listening:
+        #     print("x")
+        #     yield deferLater(reactor, 0.1, lambda: None)
         
+        print("mainLoop")
+    
+        userInput = yield self.obtainUserInput()
+        outputDebug("userInput: " + userInput)
+        while "fitbot" not in userInput.lower():
+            userInput = yield self.obtainUserInput()
+            outputDebug("userInput: " + userInput)
+        
+        print("fitbot gevonden")
+        
+        """
         self.outputResponse(self.introductoryText)
-        user_input = input('\033[96m \033[1m'+ "User: " + '\033[0m')
+        userInput = self.obtainUserInput()
         self.addMessageToLog("assistant", "Have we had the pleasure of crossing paths before?")
-        self.addMessageToLog("user", user_input)
-        if self.isAffirmative(user_input): #returning user
+        self.addMessageToLog("user", userInput)
+        if self.isAffirmative(userInput): #returning user
             outputDebug("Returning user")
-            includesName = self.includesName(user_input)
+            includesName = self.includesName(userInput)
             if includesName == False:
                 self.outputResponse("Alright, could you tell me your name so I can retrieve the details of our last conversation?")
-                user_input = input('\033[96m \033[1m'+ "User: " + '\033[0m')
-                includesName = self.includesName(user_input)
+                userInput = self.obtainUserInput()
+                includesName = self.includesName(userInput)
                 if includesName == False:
                     nameFound = False
                     name = ""
                     while not nameFound:
                         self.outputResponse("I'm sorry, I didn't catch your name. Could you kindly provide your name again?")
-                        name = input('\033[96m \033[1m'+ "User: " + '\033[0m')
+                        name = self.obtainUserInput()
                         self.outputResponse("Thank you! can you confirm your name is " + name + "?")
-                        user_input = input('\033[96m \033[1m'+ "User: " + '\033[0m')
-                        nameFound = self.isAffirmative(user_input)
+                        userInput = self.obtainUserInput()
+                        nameFound = self.isAffirmative(userInput)
                     self.clientName = name
                     self.addMessageToLog("user", "My name is" + name)
                 else:
@@ -157,22 +204,22 @@ class ManagerLLM:
             else: 
                 self.clientName = includesName.split(": ")[1]
             self.outputResponse("Welcome back, " + self.clientName + "! Could you now tell me your password?")
-            password = input('\033[96m \033[1m'+ "User: " + '\033[0m')
+            password = self.obtainUserInput()
             self.outputResponse("Thank you! can you confirm your password is " + password + "?")
-            user_input = input('\033[96m \033[1m'+ "User: " + '\033[0m')
-            while not self.isAffirmative(user_input):
+            userInput = self.obtainUserInput()
+            while not self.isAffirmative(userInput):
                 self.outputResponse("I'm sorry, could you provide me your password once again?")
-                password = input('\033[96m \033[1m'+ "User: " + '\033[0m')
+                password = self.obtainUserInput()
                 self.outputResponse("Thank you! can you confirm your password is " + password + "?")
-                user_input = input('\033[96m \033[1m'+ "User: " + '\033[0m')
+                userInput = self.obtainUserInput()
             self.clientPassword = password
             self.outputResponse(self.loadConversation())
 
                 
             #TODO:retrieve details from database, provide quick summary of last conversation
             while True:
-                user_input = input('\033[96m \033[1m'+ "User: " + '\033[0m')
-                response = self.generateAnswer(user_input)
+                userInput = self.obtainUserInput()
+                response = self.generateAnswer(userInput)
                 if '<stop>' in response:
                     response = response.split('<stop>')[0]
                     self.outputResponse(response)
@@ -182,51 +229,51 @@ class ManagerLLM:
 
         else: #new user
             outputDebug("New user")
-            includesName = self.includesName(user_input)
+            includesName = self.includesName(userInput)
             if includesName == False:
                 self.outputResponse("Nice to meet you! Are you okay with sharing your name? It would help me address you more personally throughout our conversation.")
-                user_input = input('\033[96m \033[1m'+ "User: " + '\033[0m')
-                if self.isAffirmative(user_input):
+                userInput = self.obtainUserInput()
+                if self.isAffirmative(userInput):
                     self.permissions = True
-                    includesName = self.includesName(user_input)
+                    includesName = self.includesName(userInput)
                     if includesName == False:
                         nameFound = False
                         self.outputResponse("Great! Could you tell me your name?")
-                        name = input('\033[96m \033[1m'+ "User: " + '\033[0m')
+                        name = self.obtainUserInput()
                         self.outputResponse("Thank you! can you confirm your name is " + name + "?")
-                        user_input = input('\033[96m \033[1m'+ "User: " + '\033[0m')
-                        while not self.isAffirmative(user_input):
+                        userInput = self.obtainUserInput()
+                        while not self.isAffirmative(userInput):
                             self.outputResponse("I'm sorry. Could you kindly provide your name again?")
-                            name = input('\033[96m \033[1m'+ "User: " + '\033[0m')
+                            name = self.obtainUserInput()
                             self.outputResponse("Thank you! Can you confirm your name is " + name + "?")
-                            user_input = input('\033[96m \033[1m'+ "User: " + '\033[0m')
+                            userInput = self.obtainUserInput()
                         self.clientName = name
                     else:
                         self.clientName = includesName.split(": ")[1]
                     self.addMessageToLog("user", "My name is" + self.clientName)
                     self.addMessageToLog("assistant", "Nice to meet you, " + self.clientName + "! How can I help you today?")
                     self.outputResponse("Nice to meet you, " + self.clientName + "! Before we start our conversation, could you please provide a password, so I can reference our conversation next time we meet?")
-                    response = input('\033[96m \033[1m'+ "User: " + '\033[0m')
+                    response = self.obtainUserInput()
                     includesPassword = self.includesPassword(response)
                     if includesPassword == False:
                         passwordFound = False
                         password = ""
                         while not passwordFound:
                             self.outputResponse("I'm sorry. Could you kindly provide your password again?")
-                            password = input('\033[96m \033[1m'+ "User: " + '\033[0m')
+                            password = self.obtainUserInput()
                             self.outputResponse("Thank you! can you confirm your password is " + password + "?")
-                            user_input = input('\033[96m \033[1m'+ "User: " + '\033[0m')
-                            passwordFound = self.isAffirmative(user_input)
+                            userInput = self.obtainUserInput()
+                            passwordFound = self.isAffirmative(userInput)
                         self.clientPassword = password
                     else:
                         password = includesPassword.split(": ")[1]
                         self.outputResponse("Thank you! Can you confirm your password is " + password + "?")
-                        user_input = input('\033[96m \033[1m'+ "User: " + '\033[0m')
-                        while not self.isAffirmative(user_input):
+                        userInput = self.obtainUserInput()
+                        while not self.isAffirmative(userInput):
                             self.outputResponse("I'm sorry. Could you kindly provide your password again?")
-                            password = input('\033[96m \033[1m'+ "User: " + '\033[0m')
+                            password = self.obtainUserInput()
                             self.outputResponse("Thank you! Can you confirm your password is " + password + "?")
-                            user_input = input('\033[96m \033[1m'+ "User: " + '\033[0m')
+                            userInput = self.obtainUserInput()
                         self.clientPassword = password
                     self.outputResponse("Great! I have saved your password. Let's get started! What can I help you with today?")
                 else:
@@ -238,17 +285,18 @@ class ManagerLLM:
                 #self.outputResponse("Nice to meet you, " + self.clientName + "! How can I help you today?")
 
             while True:
-                user_input = input('\033[96m \033[1m'+ "User: " + '\033[0m')
-                response = self.generateAnswer(user_input)
+                userInput = self.obtainUserInput()
+                response = self.generateAnswer(userInput)
                 if '<stop>' in response:
                     response = response.split('<stop>')[0]
                     self.outputResponse(response)
                     self.saveConversation(True)
                     break
                 self.outputResponse(response)
+                """
 
-systemPrompt = "You are a friendly virtual fitness coach, called FitBot, talking to your client. Mention their name if you know this and is seems appropiate. Be sure to keep a professional and well-mannered conversation. Don't answer any off-topic questions. If someone does ask you a question unrelated to fitness, explain that you are unable to answer it and do not provide the answer to the question. If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information. If you  are provding a list of exercises or a routine,  mark the beginning of the list with <list> and the end with </list>. Only mark the list itself, so that it can be extracted. If you have any comments about the routine or about specific exercises, dont include them in the marked area, but put them before or after. Write down the exercises in the following format:  '[exerciseNr][exercise]; [sets]; [reps]\n'. If you do include a <list></list> section in your response, reference to this in your response. If the conversation seems to be reaching its end, ask whether the user/client has any more fitness-related questions or whether you can be of any more assistance, but don't ask this too often through the conversation. If they don't, you can end the conversation with a friendly greeting in which you adress them by their name if you know their name, and insert the keyword '<stop>' at the very end. If you finish with a question, don't end the conversation yet, as the user won't be able to answer your question anymore then."
-introductoryText = "Hello! I am FitBot, your robotic virtual fitness coach. I am here to help you with your fitness journey. I can provide you with information about exercises, routines, and general fitness advice. If you have any questions, feel free to ask me. If you want to end our conversation, please say the phrase 'Bye FitBot'. Before we start our conversation, I was wondering if have we had the pleasure of crossing paths before?"
-LLM = ManagerLLM(systemPrompt, introductoryText)
-LLM.mainLoop()
+# systemPrompt = "You are a friendly virtual fitness coach, called FitBot, talking to your client. Mention their name if you know this and is seems appropiate. Be sure to keep a professional and well-mannered conversation. Don't answer any off-topic questions. If someone does ask you a question unrelated to fitness, explain that you are unable to answer it and do not provide the answer to the question. If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information. If you  are provding a list of exercises or a routine,  mark the beginning of the list with <list> and the end with </list>. Only mark the list itself, so that it can be extracted. If you have any comments about the routine or about specific exercises, dont include them in the marked area, but put them before or after. Write down the exercises in the following format:  '[exerciseNr][exercise]; [sets]; [reps]\n'. If you do include a <list></list> section in your response, reference to this in your response. If the conversation seems to be reaching its end, ask whether the user/client has any more fitness-related questions or whether you can be of any more assistance, but don't ask this too often through the conversation. If they don't, you can end the conversation with a friendly greeting in which you adress them by their name if you know their name, and insert the keyword '<stop>' at the very end. If you finish with a question, don't end the conversation yet, as the user won't be able to answer your question anymore then."
+# introductoryText = "Hello! I am FitBot, your robotic virtual fitness coach. I am here to help you with your fitness journey. I can provide you with information about exercises, routines, and general fitness advice. If you have any questions, feel free to ask me. If you want to end our conversation, please say the phrase 'Bye FitBot'. Before we start our conversation, I was wondering if have we had the pleasure of crossing paths before?"
+# LLM = ManagerLLM(systemPrompt, introductoryText)
+# LLM.mainLoop()
 
