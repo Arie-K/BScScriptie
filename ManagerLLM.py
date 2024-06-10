@@ -28,6 +28,9 @@ class ManagerLLM:
         self.listening = True
         self.transcription = ""
         self.transcriptionComplete = False
+        self.nrUnprocessedTranscriptions = 0
+        self.robotSession = None
+        self.doneTalking = False
 
         rows = self.cursorDB.fetchall()
 
@@ -52,6 +55,8 @@ class ManagerLLM:
         self.cursorDB.execute("SELECT chats FROM chatSummaries WHERE name = ? AND password = ?", (self.clientName.lower(), self.clientPassword))
         chatHistory = self.cursorDB.fetchall()
         print(chatHistory)
+        if chatHistory == []:
+            return "I'm sorry, I couldn't find any previous conversations with you. Could you tell me a bit more about yourself?"
         self.addMessageToLog("system", "The following is a summary of the last conversation you had with this particular client. Quickly summarize this in your response and catch up with the client. You could ask about their progression or about how they felt about some of the advice you gave them, for example whether they implemented it succesfully. Try to ask a question with makes it clear that you remember your last conversation together. Keep the context of this previous conversation in mind while answering questions during the rest of the conversation. This is the summary of the last conversation: " + chatHistory[0][0])
         completion = client.chat.completions.create(
             model="gpt-3.5-turbo-0125",
@@ -88,12 +93,16 @@ class ManagerLLM:
         fullResponse.spokenResponse = response
         return fullResponse
     
+    @inlineCallbacks
     def outputResponse(self, response):
+        #TODO: convert response
         print('\033[92m \033[1m' + "FitBot: " + '\033[0m', response)
-        #TODO: output response to audio stream
+        try:
+            yield self.robotSession.call("rie.dialogue.say", text=response, lang="en")
+        except Exception as e:
+            print(e)
 
     def obtainUserInput(self):
-        print("obtainUserInput")
         self.listening = True
         return self._wait_for_transcription()
 
@@ -104,12 +113,15 @@ class ManagerLLM:
 
     def _check_transcription(self, d):
         # print("checkTranscription: ", self.transcriptionComplete, self.transcription)
-        if self.transcriptionComplete:
+        if self.transcriptionComplete or self.doneTalking:
             print("complete")
             self.listening = False
             userInput = self.transcription
+            if userInput.strip() == "":
+                userInput = "* silence *"
             self.transcription = ""
             self.transcriptionComplete = False
+            self.doneTalking = False
             d.callback(userInput)
         else:
             # print("not complete")
@@ -152,12 +164,40 @@ class ManagerLLM:
         else:
             return False
         
+    def isFinishedSpeaking(self, inputText):
+        #TODO: not working properly, either change prompt or just use silence detection (would not work in noisy environments)
+        completion = client.chat.completions.create(
+            model="gpt-3.5-turbo-0125",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You will receive an unpunctuated transcription of a part of an audio fragment. "
+                        "This transcription can be a complete sentence or just a fragment of it. "
+                        "Your task is to determine if the user has likely finished speaking the current sentence. "
+                        "If the sentence seems complete, without any sign of continuation, return 'True'. "
+                        "However, if the sentence appears incomplete, cut off, or likely to be extended in the next part, return 'False'. "
+                        "Only respond with 'True' or 'False', nothing else. "
+                        "Additionally, you will receive a parameter indicating the number of consecutive transcriptions deemed unfinished so far. "
+                        "If this number is high, it increases the likelihood that the current transcription is complete. "
+                        "The number of consecutive unfinished transcriptions is: " + str(self.nrUnprocessedTranscriptions) + ". "
+                        "If you are unsure, favor True over False. If you feel like there could be a continuation, but the statement so far could also be interpeted as a complete sence, return True."
+                        "Based on this context, please determine whether the following user input is a complete sentence or not: " + inputText
+                    )
+                }
+            ]
+        )
+        print(completion.choices[0].message.content)
+        return "true" in completion.choices[0].message.content.lower()
+        
     def processTranscription(self, transcription):
         #TODO: combine multiple transcriptions into one until sentence complete
         self.transcription += " " + transcription
-        self.transcriptionComplete = True
-        #check if transcription is complete
-        #if complete, generate response
+        self.nrUnprocessedTranscriptions += 1
+        if self.isFinishedSpeaking(self.transcription):
+            print("sentence complete")
+            self.transcriptionComplete = True
+            self.nrUnprocessedTranscriptions = 0
 
     @inlineCallbacks
     def mainLoop(self):
@@ -166,36 +206,38 @@ class ManagerLLM:
         #     print("x")
         #     yield deferLater(reactor, 0.1, lambda: None)
         
-        print("mainLoop")
+        print("main loop")
     
         userInput = yield self.obtainUserInput()
         outputDebug("userInput: " + userInput)
-        while "fitbot" not in userInput.lower():
+        while "fitness" not in userInput.lower():
             userInput = yield self.obtainUserInput()
             outputDebug("userInput: " + userInput)
         
-        print("fitbot gevonden")
+        print("fitness gevonden")
+
+        yield self.outputResponse("this is a test message")
         
-        """
-        self.outputResponse(self.introductoryText)
-        userInput = self.obtainUserInput()
+
+        #yield self.outputResponse(self.introductoryText)
+        userInput = yield self.obtainUserInput()
         self.addMessageToLog("assistant", "Have we had the pleasure of crossing paths before?")
         self.addMessageToLog("user", userInput)
         if self.isAffirmative(userInput): #returning user
             outputDebug("Returning user")
             includesName = self.includesName(userInput)
             if includesName == False:
-                self.outputResponse("Alright, could you tell me your name so I can retrieve the details of our last conversation?")
-                userInput = self.obtainUserInput()
+                yield self.outputResponse("Alright, could you tell me your name so I can retrieve the details of our last conversation?")
+                userInput = yield self.obtainUserInput()
                 includesName = self.includesName(userInput)
                 if includesName == False:
                     nameFound = False
                     name = ""
                     while not nameFound:
-                        self.outputResponse("I'm sorry, I didn't catch your name. Could you kindly provide your name again?")
-                        name = self.obtainUserInput()
-                        self.outputResponse("Thank you! can you confirm your name is " + name + "?")
-                        userInput = self.obtainUserInput()
+                        yield self.outputResponse("I'm sorry, I didn't catch your name. Could you kindly provide your name again?")
+                        name = yield self.obtainUserInput()
+                        yield self.outputResponse("Thank you! can you confirm your name is " + name + "?")
+                        userInput = yield self.obtainUserInput()
                         nameFound = self.isAffirmative(userInput)
                     self.clientName = name
                     self.addMessageToLog("user", "My name is" + name)
@@ -203,97 +245,96 @@ class ManagerLLM:
                     self.clientName = includesName.split(": ")[1]
             else: 
                 self.clientName = includesName.split(": ")[1]
-            self.outputResponse("Welcome back, " + self.clientName + "! Could you now tell me your password?")
-            password = self.obtainUserInput()
-            self.outputResponse("Thank you! can you confirm your password is " + password + "?")
-            userInput = self.obtainUserInput()
+            yield self.outputResponse("Welcome back, " + self.clientName + "! Could you now tell me your password?")
+            password = yield self.obtainUserInput()
+            yield self.outputResponse("Thank you! can you confirm your password is " + password + "?")
+            userInput = yield self.obtainUserInput()
             while not self.isAffirmative(userInput):
-                self.outputResponse("I'm sorry, could you provide me your password once again?")
-                password = self.obtainUserInput()
-                self.outputResponse("Thank you! can you confirm your password is " + password + "?")
-                userInput = self.obtainUserInput()
+                yield self.outputResponse("I'm sorry, could you provide me your password once again?")
+                password = yield self.obtainUserInput()
+                yield self.outputResponse("Thank you! can you confirm your password is " + password + "?")
+                userInput = yield self.obtainUserInput()
             self.clientPassword = password
-            self.outputResponse(self.loadConversation())
+            yield self.outputResponse(self.loadConversation())
 
                 
             #TODO:retrieve details from database, provide quick summary of last conversation
             while True:
-                userInput = self.obtainUserInput()
+                userInput = yield self.obtainUserInput()
                 response = self.generateAnswer(userInput)
                 if '<stop>' in response:
                     response = response.split('<stop>')[0]
-                    self.outputResponse(response)
+                    yield self.outputResponse(response)
                     self.saveConversation(False)
                     break
-                self.outputResponse(response)
+                yield self.outputResponse(response)
 
         else: #new user
             outputDebug("New user")
             includesName = self.includesName(userInput)
             if includesName == False:
-                self.outputResponse("Nice to meet you! Are you okay with sharing your name? It would help me address you more personally throughout our conversation.")
-                userInput = self.obtainUserInput()
+                yield self.outputResponse("Nice to meet you! Are you okay with sharing your name? It would help me address you more personally throughout our conversation.")
+                userInput = yield self.obtainUserInput()
                 if self.isAffirmative(userInput):
                     self.permissions = True
                     includesName = self.includesName(userInput)
                     if includesName == False:
                         nameFound = False
-                        self.outputResponse("Great! Could you tell me your name?")
-                        name = self.obtainUserInput()
-                        self.outputResponse("Thank you! can you confirm your name is " + name + "?")
-                        userInput = self.obtainUserInput()
+                        yield self.outputResponse("Great! Could you tell me your name?")
+                        name = yield self.obtainUserInput()
+                        yield self.outputResponse("Thank you! can you confirm your name is " + name + "?")
+                        userInput = yield self.obtainUserInput()
                         while not self.isAffirmative(userInput):
-                            self.outputResponse("I'm sorry. Could you kindly provide your name again?")
-                            name = self.obtainUserInput()
-                            self.outputResponse("Thank you! Can you confirm your name is " + name + "?")
-                            userInput = self.obtainUserInput()
+                            yield self.outputResponse("I'm sorry. Could you kindly provide your name again?")
+                            name = yield self.obtainUserInput()
+                            yield self.outputResponse("Thank you! Can you confirm your name is " + name + "?")
+                            userInput = yield self.obtainUserInput()
                         self.clientName = name
                     else:
                         self.clientName = includesName.split(": ")[1]
                     self.addMessageToLog("user", "My name is" + self.clientName)
                     self.addMessageToLog("assistant", "Nice to meet you, " + self.clientName + "! How can I help you today?")
-                    self.outputResponse("Nice to meet you, " + self.clientName + "! Before we start our conversation, could you please provide a password, so I can reference our conversation next time we meet?")
-                    response = self.obtainUserInput()
+                    yield self.outputResponse("Nice to meet you, " + self.clientName + "! Before we start our conversation, could you please provide a password, so I can reference our conversation next time we meet?")
+                    response = yield self.obtainUserInput()
                     includesPassword = self.includesPassword(response)
                     if includesPassword == False:
                         passwordFound = False
                         password = ""
                         while not passwordFound:
-                            self.outputResponse("I'm sorry. Could you kindly provide your password again?")
-                            password = self.obtainUserInput()
-                            self.outputResponse("Thank you! can you confirm your password is " + password + "?")
-                            userInput = self.obtainUserInput()
+                            yield self.outputResponse("I'm sorry. Could you kindly provide your password again?")
+                            password = yield self.obtainUserInput()
+                            yield self.outputResponse("Thank you! can you confirm your password is " + password + "?")
+                            userInput = yield self.obtainUserInput()
                             passwordFound = self.isAffirmative(userInput)
                         self.clientPassword = password
                     else:
                         password = includesPassword.split(": ")[1]
-                        self.outputResponse("Thank you! Can you confirm your password is " + password + "?")
-                        userInput = self.obtainUserInput()
+                        yield self.outputResponse("Thank you! Can you confirm your password is " + password + "?")
+                        userInput = yield self.obtainUserInput()
                         while not self.isAffirmative(userInput):
-                            self.outputResponse("I'm sorry. Could you kindly provide your password again?")
-                            password = self.obtainUserInput()
-                            self.outputResponse("Thank you! Can you confirm your password is " + password + "?")
-                            userInput = self.obtainUserInput()
+                            yield self.outputResponse("I'm sorry. Could you kindly provide your password again?")
+                            password = yield self.obtainUserInput()
+                            yield self.outputResponse("Thank you! Can you confirm your password is " + password + "?")
+                            userInput = yield self.obtainUserInput()
                         self.clientPassword = password
-                    self.outputResponse("Great! I have saved your password. Let's get started! What can I help you with today?")
+                    yield self.outputResponse("Great! I have saved your password. Let's get started! What can I help you with today?")
                 else:
                     self.permissions = False
-                    self.outputResponse("Thats okay, what can I help you with today?")
+                    yield self.outputResponse("Thats okay, what can I help you with today?")
             else: 
                 self.clientName = includesName.split(": ")[1]
-                self.outputResponse(self.loadConversation())
-                #self.outputResponse("Nice to meet you, " + self.clientName + "! How can I help you today?")
+                yield self.outputResponse(self.loadConversation())
+                #yield self.outputResponse("Nice to meet you, " + self.clientName + "! How can I help you today?")
 
             while True:
-                userInput = self.obtainUserInput()
+                userInput = yield self.obtainUserInput()
                 response = self.generateAnswer(userInput)
                 if '<stop>' in response:
                     response = response.split('<stop>')[0]
-                    self.outputResponse(response)
+                    yield self.outputResponse(response)
                     self.saveConversation(True)
                     break
-                self.outputResponse(response)
-                """
+                yield self.outputResponse(response)
 
 # systemPrompt = "You are a friendly virtual fitness coach, called FitBot, talking to your client. Mention their name if you know this and is seems appropiate. Be sure to keep a professional and well-mannered conversation. Don't answer any off-topic questions. If someone does ask you a question unrelated to fitness, explain that you are unable to answer it and do not provide the answer to the question. If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information. If you  are provding a list of exercises or a routine,  mark the beginning of the list with <list> and the end with </list>. Only mark the list itself, so that it can be extracted. If you have any comments about the routine or about specific exercises, dont include them in the marked area, but put them before or after. Write down the exercises in the following format:  '[exerciseNr][exercise]; [sets]; [reps]\n'. If you do include a <list></list> section in your response, reference to this in your response. If the conversation seems to be reaching its end, ask whether the user/client has any more fitness-related questions or whether you can be of any more assistance, but don't ask this too often through the conversation. If they don't, you can end the conversation with a friendly greeting in which you adress them by their name if you know their name, and insert the keyword '<stop>' at the very end. If you finish with a question, don't end the conversation yet, as the user won't be able to answer your question anymore then."
 # introductoryText = "Hello! I am FitBot, your robotic virtual fitness coach. I am here to help you with your fitness journey. I can provide you with information about exercises, routines, and general fitness advice. If you have any questions, feel free to ask me. If you want to end our conversation, please say the phrase 'Bye FitBot'. Before we start our conversation, I was wondering if have we had the pleasure of crossing paths before?"
