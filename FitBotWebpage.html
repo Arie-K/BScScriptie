@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FitBot</title>
+    <style>
+      body {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        margin: 0;
+        font-family: Arial, sans-serif;
+        background-color: #121212;
+        color: white;
+        padding: 20px;
+        box-sizing: border-box;
+        white-space: pre-line;
+      }
+      .container {
+        width: 100%;
+        max-width: 600px;
+        background-color: #1e1e1e;
+        border-radius: 8px;
+        padding: 20px;
+        margin-bottom: 20px;
+        text-align: center;
+      }
+      #response {
+        max-height: 200px;
+        overflow-y: auto;
+        font-size: 18px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        border: 2px solid white;
+      }
+      th,
+      td {
+        padding: 12px;
+        border: 1px solid white;
+        text-align: center;
+        font-size: 24px;
+      }
+      th {
+        background-color: #333;
+      }
+      h2 {
+        margin-top: 0;
+        margin-bottom: 10px;
+        text-align: center;
+      }
+      .placeholder {
+        color: #777;
+        font-style: italic;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h2>FitBot</h2>
+      <div id="response">
+        <p class="placeholder">Waiting for response...</p>
+      </div>
+    </div>
+    <div class="container">
+      <h2>Routine</h2>
+      <div id="routine">
+        <p class="placeholder">No routine available yet.</p>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/autobahn-browser@19.7.3/autobahn.min.js"></script>
+    <script>
+      let wamp = new autobahn.Connection({
+        url: "wss://wamp.robotsindeklas.nl",
+        realm: "rie.666c0541961f249628fc2f5a",
+        protocols: ["wamp.2.msgpack"],
+      });
+
+      wamp.onopen = async function (session) {
+        console.log("Connection established.");
+
+        function setResponse(response) {
+          console.log("Response received:", response);
+          document.getElementById("response").innerHTML =
+            "<p>" + (response || "") + "</p>";
+          return;
+        }
+        await session.register("ridk.fitbot.setResponse", setResponse);
+
+        function setRoutine(routineHTML) {
+          console.log("Routine received:", routineHTML);
+          document.getElementById("routine").innerHTML = routineHTML || "";
+          return;
+        }
+        await session.register("ridk.fitbot.setRoutine", setRoutine);
+      };
+
+      wamp.onclose = function (reason, details) {
+        console.log("Connection closed:", reason);
+        console.log("Details:", details);
+      };
+
+      wamp.open();
+
+      function closeConnection() {
+        if (wamp) {
+          wamp.close();
+          console.log("Connection closed.");
+        }
+      }
+    </script>
+  </body>
+</html>

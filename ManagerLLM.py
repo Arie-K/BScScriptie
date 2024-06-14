@@ -3,6 +3,7 @@ from openai import OpenAI
 from twisted.internet.task import deferLater
 from twisted.internet import reactor, defer
 from twisted.internet.defer import inlineCallbacks
+import re
 
 client = OpenAI()
 
@@ -31,12 +32,16 @@ class ManagerLLM:
         self.nrUnprocessedTranscriptions = 0
         self.robotSession = None
         self.doneTalking = False
+        self.initializeHTML()
 
         rows = self.cursorDB.fetchall()
 
         # for row in rows:
         #     print(row)
 
+    def initializeHTML(self):
+        with open('workoutRoutine.html', 'w') as file:
+            file.write("")
 
     def addMessageToLog(self, role, content):
         self.messageLog.append({"role": role, "content": content})
@@ -55,7 +60,7 @@ class ManagerLLM:
         self.cursorDB.execute("SELECT chats FROM chatSummaries WHERE name = ? AND password = ?", (self.clientName.lower(), self.clientPassword))
         chatHistory = self.cursorDB.fetchall()
         print(chatHistory)
-        if chatHistory == []:
+        if chatHistory == []: #TODO: not tested and conversation is not saved properly
             return "I'm sorry, I couldn't find any previous conversations with you. Could you tell me a bit more about yourself?"
         self.addMessageToLog("system", "The following is a summary of the last conversation you had with this particular client. Quickly summarize this in your response and catch up with the client. You could ask about their progression or about how they felt about some of the advice you gave them, for example whether they implemented it succesfully. Try to ask a question with makes it clear that you remember your last conversation together. Keep the context of this previous conversation in mind while answering questions during the rest of the conversation. This is the summary of the last conversation: " + chatHistory[0][0])
         completion = client.chat.completions.create(
@@ -87,17 +92,60 @@ class ManagerLLM:
         self.connectionDB.close()
         return True
 
-    def convertResponse(self, response):
-        fullResponse = fullResponse()
-        #TODO: extract routines or long lists from response
-        fullResponse.spokenResponse = response
-        return fullResponse
+    def process_workout_text(session, text):
+        # Define regex to match the <list>...</list> content
+        list_pattern = re.compile(r'<list>(.*?)</list>', re.DOTALL)
+        
+        # Extract the list content
+        list_match = list_pattern.search(text)
+        if list_match:
+            list_content = list_match.group(1).strip()
+            
+            # Remove the list content from the original text
+            cleaned_text = list_pattern.sub('', text).strip()
+            
+            # Parse the list into a structured format
+            exercises = []
+            for line in list_content.split('\n'):
+                if line.strip():
+                    parts = line.split(';')
+                    if len(parts) == 3:
+                        exercise = parts[0].strip()
+                        sets = parts[1].strip()
+                        reps = parts[2].strip()
+                        exercises.append((exercise, sets, reps))
+            
+            # Create the HTML content with CSS to center the table
+            routineHTML = '''
+                    <table>
+                    <tr>
+                        <th>Exercise</th>
+                        <th>Sets</th>
+                        <th>Reps</th>
+                    </tr>
+                    '''
+            for exercise in exercises:
+                routineHTML += f'''
+                <tr>
+                    <td>{exercise[0]}</td>
+                    <td>{exercise[1]}</td>
+                    <td>{exercise[2]}</td>
+                </tr>
+                '''
+            routineHTML += "</table>"
+            
+            session.call("ridk.fitbot.setRoutine", routineHTML)
+            
+            return cleaned_text
+        else:
+            return text
     
     @inlineCallbacks
     def outputResponse(self, response):
-        #TODO: convert response
+        response = self.convertResponse(response)
         print('\033[92m \033[1m' + "FitBot: " + '\033[0m', response)
         try:
+            yield self.robotSession.call("ridk.fitbot.setResponse", response)
             yield self.robotSession.call("rie.dialogue.say", text=response, lang="en")
         except Exception as e:
             print(e)
@@ -112,7 +160,6 @@ class ManagerLLM:
         return d
 
     def _check_transcription(self, d):
-        # print("checkTranscription: ", self.transcriptionComplete, self.transcription)
         if self.transcriptionComplete or self.doneTalking:
             print("complete")
             self.listening = False
@@ -172,10 +219,11 @@ class ManagerLLM:
                 {
                     "role": "system",
                     "content": (
-                        "You will receive an unpunctuated transcription of a part of an audio fragment. "
+                        "You are a virtual assistant talking to a user."
+                        "You will receive an unpunctuated transcription of what the user has said. "
                         "This transcription can be a complete sentence or just a fragment of it. "
                         "Your task is to determine if the user has likely finished speaking the current sentence. "
-                        "If the sentence seems complete, without any sign of continuation, return 'True'. "
+                        "If the sentence seems complete, or complete enough for you to interpret it and respond with something useful, return 'True'. "
                         "However, if the sentence appears incomplete, cut off, or likely to be extended in the next part, return 'False'. "
                         "Only respond with 'True' or 'False', nothing else. "
                         "Additionally, you will receive a parameter indicating the number of consecutive transcriptions deemed unfinished so far. "
@@ -216,7 +264,7 @@ class ManagerLLM:
         
         print("fitness gevonden")
 
-        yield self.outputResponse("this is a test message")
+        yield self.outputResponse(self.introductoryText)
         
 
         #yield self.outputResponse(self.introductoryText)
