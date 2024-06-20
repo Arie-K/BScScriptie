@@ -11,6 +11,12 @@ def main(session, details):
     1. Bench Press; 3 sets; 8-12 reps
     2. Seated Row; 3 sets; 8-12 reps
     3. Squats; 4 sets; 8-12 reps
+    1. Bench Press; 3 sets; 8-12 reps
+    2. Seated Row; 3 sets; 8-12 reps
+    3. Squats; 4 sets; 8-12 reps
+    1. Bench Press; 3 sets; 8-12 reps
+    2. Seated Row; 3 sets; 8-12 reps
+    3. Squats; 4 sets; 8-12 reps
     </list>
     Enjoy your workout!'''
 
@@ -18,8 +24,14 @@ def main(session, details):
     print("Cleaned text without the list:")
     print(cleaned_text)
     yield session.call("ridk.fitbot.setResponse", cleaned_text)
+    yield session.call("ridk.fitbot.setStatus", "Listening", True)
+    yield sleep(3)
+    yield session.call("ridk.fitbot.setStatus", "Processing", True)
+    yield sleep(1)
+    yield session.call("ridk.fitbot.setStatus", "Speaking", True)
     yield sleep(2.5)
-    yield session.call("ridk.fitbot.setResponse", "This is a new response\n with multiple lines.\nThis is a new response\n with multiple lines.\nThis is a new response\n with multiple lines.\nThis is a new response\n with multiple lines.\nThis is a new response\n with multiple lines.\nThis is a new response\n with multiple lines.\nThis is a new response\n with multiple lines.\nThis is a new response\n with multiple lines.\nThis is a new response\n with multiple lines.\nThis is a new response\n with multiple lines.\n")
+    yield session.call("ridk.fitbot.setStatus", "Listening", True)
+    yield session.call("ridk.fitbot.setResponse", "**This is a new response**\n with multiple lines.\nThis is a new response\n with multiple lines.\nThis is a new response\n with multiple lines.\nThis is a new response\n with multiple lines.\nThis is a new response\n with multiple lines.\nThis is a new response\n with multiple lines.\nThis is a new response\n with multiple lines.\nThis is a new response\n with multiple lines.\nThis is a new response\n with multiple lines.\nThis is a new response\n with multiple lines.\n")
     yield session.leave()
      
 def process_workout_text(session, text):
@@ -76,7 +88,7 @@ wamp = Component(
 		"serializers": ["msgpack"],
 		"max_retries": 0
 	}],
-	realm="rie.666c0541961f249628fc2f5a",
+	realm="rie.667448cb755a12a49504e352",
 )
 
 wamp.on_join(main)
