@@ -46,7 +46,7 @@
         padding: 12px;
         border: 1px solid white;
         text-align: center;
-        font-size: 24px;
+        font-size: 20px;
       }
       th {
         background-color: #333;
@@ -113,14 +113,14 @@
     <script>
       let wamp = new autobahn.Connection({
         url: "wss://wamp.robotsindeklas.nl",
-        realm: "rie.667448cb755a12a49504e352",
+        realm: "rie.668458cc6fa8c0d4583ad629",
         protocols: ["wamp.2.msgpack"],
       });
 
       wamp.onopen = async function (session) {
         console.log("Connection established.");
 
-        function setResponse(response) {
+        function SetResponse(response) {
           console.log("Response received:", response);
           const responseText = Array.isArray(response)
             ? response.join("\n")
@@ -130,16 +130,16 @@
           );
           return null;
         }
-        await session.register("ridk.fitbot.setResponse", setResponse);
+        await session.register("ridk.fitbot.SetResponse", SetResponse);
 
-        function setRoutine(routineHTML) {
+        function SetRoutine(routineHTML) {
           console.log("Routine received:", routineHTML);
           document.getElementById("routine").innerHTML = routineHTML || "";
           return null;
         }
-        await session.register("ridk.fitbot.setRoutine", setRoutine);
+        await session.register("ridk.fitbot.SetRoutine", SetRoutine);
 
-        function setStatus(status) {
+        function SetStatus(status) {
           console.log("Status received:", status);
           if (status[1]) {
             document.getElementById("status").innerHTML =
@@ -149,7 +149,16 @@
           }
           return null;
         }
-        await session.register("ridk.fitbot.setStatus", setStatus);
+        await session.register("ridk.fitbot.SetStatus", SetStatus);
+
+        function InitializeWebPage() {
+          location.reload();
+          return null;
+        }
+        await session.register(
+          "ridk.fitbot.InitializeWebPage",
+          InitializeWebPage
+        );
       };
 
       wamp.onclose = function (reason, details) {

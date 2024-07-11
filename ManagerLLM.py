@@ -4,7 +4,7 @@ from twisted.internet.task import deferLater
 from twisted.internet import reactor, defer
 from twisted.internet.defer import inlineCallbacks
 import re
-import time
+from autobahn.twisted.util import sleep
 
 client = OpenAI()
 
@@ -28,7 +28,7 @@ class ManagerLLM:
         self.nrUnprocessedTranscriptions = 0
         self.robotSession = None
         self.doneTalking = False
-        self.silenceLimit = 2.5
+        self.silenceLimit = 1.5
         self.registeredNames = []
 
         self.cursorDB.execute("SELECT name FROM chatSummaries")
@@ -52,8 +52,14 @@ class ManagerLLM:
     def LoadConversation(self):
         self.cursorDB.execute("SELECT chats FROM chatSummaries WHERE name = ? AND pincode = ?", (self.clientName.lower(), self.clientPincode))
         chatHistory = self.cursorDB.fetchall()
-        print(chatHistory)
-        self.AddMessageToLog("system", "The following is a summary of the last conversation you had with this particular client. Quickly summarize this in your response and catch up with the client. You could ask about their progression or about how they felt about some of the advice you gave them, for example whether they implemented it succesfully. Try to ask a question with makes it clear that you remember your last conversation together. Keep the context of this previous conversation in mind while answering questions during the rest of the conversation. This is the summary of the last conversation: " + chatHistory[0][0])
+        instructionMessage = (
+            "The following is a summary of the last conversation you had with this particular client. Quickly summarize this in your response and catch up with the client."
+            "You could ask about their progression or about how they felt about some of the advice you gave them, for example whether they implemented it succesfully."
+            "Try to ask a question with makes it clear that you remember your last conversation together."
+            "Keep the context of this previous conversation in mind while answering questions during the rest of the conversation."
+            "This is the summary of the last conversation: " + chatHistory[0][0]
+        )
+        self.AddMessageToLog("system", instructionMessage)
         completion = client.chat.completions.create(
             model="gpt-3.5-turbo-0125",
             messages=self.messageLog
@@ -61,7 +67,13 @@ class ManagerLLM:
         return completion.choices[0].message.content
 
     def SaveConversation(self, new):
-        self.AddMessageToLog("system", "Summarize the entire conversation up to this point, including the summary you may have been provided with at the start of the conversation, using short sententences or keywords. Do this in a way so you could retrieve the most important conversation topics if you were to read this summary later, in order to give more personalized feedback in future conversation. Especially focus on personal details of the client, not so much on the flow of the conversation. Be sure to include the last conversation in your summary. You do not have to mention every conversational detail that occurred, just the most important things that were discussed.")
+        instructionMessage = (
+            "Summarize the entire conversation up to this point, including the summary you may have been provided with at the start of the conversation,"
+            "using short sententences or keywords. Do this in a way so you could retrieve the most important conversation topics if you were to read this summary later,"
+            "in order to give more personalized feedback in future conversation. Especially focus on personal details of the client, not so much on the flow of the conversation."
+            "Be sure to include the last conversation in your summary. You do not have to mention every conversational detail that occurred, just the most important things that were discussed."
+        )
+        self.AddMessageToLog("system", instructionMessage)
         completion = client.chat.completions.create(
             model="gpt-3.5-turbo-0125",
             messages=self.messageLog
@@ -100,18 +112,14 @@ class ManagerLLM:
             return False
 
     def ConvertResponse(self, text):
-        # Define regex to match the <list>...</list> content
         list_pattern = re.compile(r'<list>(.*?)</list>', re.DOTALL)
         
-        # Extract the list content
         list_match = list_pattern.search(text)
         if list_match:
             list_content = list_match.group(1).strip()
             
-            # Remove the list content from the original text
             cleaned_text = list_pattern.sub('', text).strip()
             
-            # Parse the list into a structured format
             exercises = []
             for line in list_content.split('\n'):
                 if line.strip():
@@ -122,7 +130,6 @@ class ManagerLLM:
                         reps = parts[2].strip()
                         exercises.append((exercise, sets, reps))
             
-            # Create the HTML content with CSS to center the table
             routineHTML = '''
                     <table>
                     <tr>
@@ -141,9 +148,7 @@ class ManagerLLM:
                 '''
             routineHTML += "</table>"
             
-            self.robotSession.call("ridk.fitbot.setRoutine", routineHTML)
-
-            self.silenceLimit = 10.0
+            self.robotSession.call("ridk.fitbot.SetRoutine", routineHTML)
             
             return cleaned_text
         else:
@@ -156,45 +161,37 @@ class ManagerLLM:
             "eight": "8", "nine": "9"
         }
         
-        # Split the input string by spaces
         parts = inputString.split()
         
-        # List to hold the PIN code digits
         pinCode = []
         
-        # Iterate over each part
         for part in parts:
-            # Remove any non-alphanumeric characters
             cleanedPart = "".join(filter(str.isalnum, part))
             
-            # Convert written numbers to digits if present in the map
             if cleanedPart in numberMap:
                 pinCode.append(numberMap[cleanedPart])
             elif cleanedPart.isdigit():
                 pinCode.append(cleanedPart)
         
-       # Join the PIN code digits
         pinCodeStr = ''.join(pinCode)
         
-        # Check if the PIN code is exactly 4 digits
         if len(pinCodeStr) == 4:
             OutputDebug(pinCodeStr)
-            self.clientPincode = pinCodeStr  # Set the password variable
+            self.clientPincode = pinCodeStr
             return True
         else:
             return False
     
     @inlineCallbacks
     def OutputResponse(self, response):
-        if self.silenceLimit == 10.0:
-            self.silenceLimit = 2.0
         response = self.ConvertResponse(response)
         print('\033[92m \033[1m' + "FitBot: " + '\033[0m', response)
+        self.listening = False
         try:   
-            yield self.robotSession.call("ridk.fitbot.setStatus", "Speaking", False)
-            yield self.robotSession.call("ridk.fitbot.setResponse", response)
-            yield self.robotSession.call("rie.dialogue.say", text=response, lang="en")
-            yield self.robotSession.call("ridk.fitbot.setStatus", "Listening", True)
+            yield self.robotSession.call("ridk.fitbot.SetStatus", "Speaking", True)
+            yield self.robotSession.call("ridk.fitbot.SetResponse", response)
+            yield self.robotSession.call("rie.dialogue.say_animated", text=response, lang="en")
+            yield self.robotSession.call("ridk.fitbot.SetStatus", "Listening", True)
         except Exception as e:
             print(e)
 
@@ -210,23 +207,34 @@ class ManagerLLM:
     def _check_transcription(self, d):
         if self.transcriptionComplete or self.doneTalking:
             OutputDebug("complete " + str(self.transcriptionComplete) + str(self.doneTalking))
+            self.doneTalking = False
             self.listening = False
+            self.robotSession.call("ridk.fitbot.SetStatus", "Processing", True)
             userInput = self.transcription
             if userInput.strip() == "":
                 userInput = "* silence *"
             self.transcription = ""
             self.transcriptionComplete = False
-            self.doneTalking = False
             self.nrUnprocessedTranscriptions = 0
             d.callback(userInput)
         else:
-            reactor.callLater(0.1, self._check_transcription, d)
+            if self.listening:
+                reactor.callLater(0.1, self._check_transcription, d)
 
     def IsAffirmative(self, inputText):
         completion = client.chat.completions.create(
             model="gpt-3.5-turbo-0125",
             messages=[
-                {"role": "system", "content": "Your task is to disquintish between affirmative and negative responses. Respond 'true' if the statement confirms something or is an affirming statement and 'false' if it denies something or is a negative statement. Possible cases for true are cases that include 'yes', 'indeed', 'certainly', 'absolutely', 'okay', 'ok', 'correct', 'yeah', 'sure', 'affirmative' or 'of course'. Possible cases for false are cases that include 'no', 'not really', 'unfortunately not', 'mistake', 'false', 'negative' or 'never'. Please provide the correct response to the following user input: " + inputText}
+                {
+                    "role": "system",
+                    "content": (
+                        "Your task is to disquintish between affirmative and negative responses."
+                        "Respond 'true' if the statement confirms something or is an affirming statement and 'false' if it denies something or is a negative statement."
+                        "Possible cases for true are cases that include 'yes', 'indeed', 'certainly', 'absolutely', 'okay', 'ok', 'correct', 'yeah', 'sure', 'affirmative' or 'of course'."
+                        "Possible cases for false are cases that include 'no', 'not really', 'unfortunately not', 'mistake', 'false', 'negative' or 'never'."
+                        "Please provide the correct response to the following user input: " + inputText
+                    )
+                }
             ]
         )
         OutputDebug("affirmative:" + completion.choices[0].message.content)
@@ -239,7 +247,17 @@ class ManagerLLM:
         completion = client.chat.completions.create(
             model="gpt-3.5-turbo-0125",
             messages=[
-                {"role": "system", "content": "Your task is to disquintish between responses in which the user does or does not introduce themselves. Respond 'false' they have not introduced themselves and 'true: [their_name]' if they have. Possible cases for true could be when the user uses phrases like 'my name is [name]' or 'I'm [name]'. However, a single word as a response can also be their name, since the user has just been asked to provide their name. In that case, this also counts as them introducing themselves, so it is a positive/true case and [name] is the single word they responded. Please provide the correct response to the following user input: " + inputText}
+                {
+                    "role": "system",
+                    "content": (
+                        "Your task is to disquintish between responses in which the user does or does not introduce themselves."
+                        "Respond 'false' they have not introduced themselves and 'true: [their_name]' if they have."
+                        "Possible cases for true could be when the user uses phrases like 'my name is [name]' or 'I'm [name]'."
+                        "However, a single word as a response can also be their name, since the user has just been asked to provide their name."
+                        "In that case, this also counts as them introducing themselves, so it is a positive/true case and [name] is the single word they responded."
+                        "Please provide the correct response to the following user input: " + inputText
+                    )
+                }
             ]
         )
         if "true" in completion.choices[0].message.content.lower():
@@ -251,7 +269,16 @@ class ManagerLLM:
         completion = client.chat.completions.create(
             model="gpt-3.5-turbo-0125",
             messages=[
-                {"role": "system", "content": "Your task is to disquintish between responses in which the user does or does not provide a pincode. Respond 'false' there is most likely no pincode in the input and 'true: [pincode]' if there is. A positive example could be just the pincode, or an affirmation first, followed by the pincode. The pincode could either be written as digits (4 7 6) or the digits could be written out (four seven six). The length of the pincode is irrelevant. Please provide the correct response to the following user input: " + inputText}
+                {
+                    "role": "system",
+                    "content": (
+                        "Your task is to disquintish between responses in which the user does or does not provide a pincode."
+                        "Respond 'false' there is most likely no pincode in the input and 'true: [pincode]' if there is."
+                        "A positive example could be just the pincode, or an affirmation first, followed by the pincode."
+                        "The pincode could either be written as digits (4 7 6) or the digits could be written out (four seven six)."
+                        "The length of the pincode is irrelevant. Please provide the correct response to the following user input: " + inputText
+                    )
+                }
             ]
         )
         if "true" in completion.choices[0].message.content.lower():
@@ -290,14 +317,29 @@ class ManagerLLM:
     def ProcessTranscription(self, transcription):
         self.transcription += " " + transcription
         self.nrUnprocessedTranscriptions += 1
+        self.robotSession.call("ridk.fitbot.SetStatus", "Processing", True)
         if self.IsFinishedSpeaking(self.transcription):
             OutputDebug("sentence complete")
-        self.robotSession.call("ridk.fitbot.setStatus", "Processing", True)
-        self.transcriptionComplete = True
+            self.transcriptionComplete = True
+        elif self.listening:
+            self.robotSession.call("ridk.fitbot.SetStatus", "Listening", True)
 
     @inlineCallbacks
     def UnpersonalizedLoop(self):
+        yield sleep(2)
+
+        yield self.robotSession.call("rom.optional.behavior.play", name='BlocklyStand')
+        userInput = yield self.ObtainUserInput()
+        OutputDebug("userInput: " + userInput)
+        while "coaching" not in userInput.lower():
+            yield self.robotSession.call("ridk.fitbot.SetStatus", "Listening", True)
+            userInput = yield self.ObtainUserInput()
+            OutputDebug("userInput: " + userInput)
+        
+        OutputDebug("keyword found")
+
         self.AddMessageToLog("assistant", self.introductoryText)
+        yield self.OutputResponse(self.introductoryText)
 
         # Conversation loop using LLM responses
         OutputDebug("start unpersonalized conversation loop")
@@ -308,30 +350,33 @@ class ManagerLLM:
                 response = response.split('<stop>')[0]
                 yield self.OutputResponse(response)
                 yield self.OutputResponse("Session over.")
+                yield self.robotSession.call("ridk.fitbot.SetStatus", "Offline", False)
                 break
             yield self.OutputResponse(response)
 
     @inlineCallbacks
     def PersonalizedLoop(self):
         OutputDebug("main loop")
+        yield sleep(2)
 
-        yield self.robotSession.call("rom.optional.behavior.play", name='BlocklyCrouch')
+        yield self.robotSession.call("rom.optional.behavior.play", name='BlocklyStand')
     
         userInput = yield self.ObtainUserInput()
         OutputDebug("userInput: " + userInput)
-        while "begin session" not in userInput.lower():
+        while "coaching" not in userInput.lower(): #activate coaching wasn't awalys recognized
+            yield self.robotSession.call("ridk.fitbot.SetStatus", "Listening", True)
             userInput = yield self.ObtainUserInput()
             OutputDebug("userInput: " + userInput)
         
         OutputDebug("keyword found")
 
         yield self.OutputResponse(self.introductoryText)
-        # yield self.OutputResponse("Have we had the pleasure of crossing paths before?")
         userInput = yield self.ObtainUserInput()
         self.AddMessageToLog("assistant", "Have we had the pleasure of crossing paths before?")
         self.AddMessageToLog("user", userInput)
 
         permission = True
+        new = False
 
         # Returning user
         if self.IsAffirmative(userInput):
@@ -367,6 +412,7 @@ class ManagerLLM:
             # Check for name in database
             nameFound = self.nameFound()
             if not nameFound:
+                new = True
                 yield self.OutputResponse("I'm sorry, " + self.clientName + ", I can't recollect our previous interaction. Before we start our conversation, could you please provide a 4 digit pincode, so I can reference our conversation next time we meet?")
             self.AddMessageToLog("user", "Yes, my name is " + self.clientName)
 
@@ -387,7 +433,7 @@ class ManagerLLM:
                 yield self.OutputResponse("Invalid pincode. Please provide a valid 4 digit pincode.")
                 pincode = yield self.ObtainUserInput()
             # Confirm pincode
-            yield self.OutputResponse("Thank you! can you confirm your pincode is " + self.clientPincode + "?")
+            yield self.OutputResponse("Thank you! Can you confirm your pincode is " + self.clientPincode + "?")
             userInput = yield self.ObtainUserInput()
             # Loop until pincode is confirmed
             while not self.IsAffirmative(userInput):
@@ -433,6 +479,7 @@ class ManagerLLM:
 
         # New user
         else:
+            new = True
             OutputDebug("New user")
             # Check if name is provided in inital response
             includesName = self.IncludesName(userInput)
@@ -444,10 +491,17 @@ class ManagerLLM:
                     permission = False
                     yield self.OutputResponse("Thats okay, what can I help you with today?")
                 else:
-                    includesName = self.IncludesName(userInput) # TODO: maybe run paralell with isAffirmative? (only if delay is too long)
+                    includesName = self.IncludesName(userInput)
                     if includesName == False:
                         yield self.OutputResponse("Great! Could you tell me your name?")
-                        name = yield self.ObtainUserInput() # includesName() is not reliable enough to use here (since some names are not recognized as names by the model)
+                        userInput = yield self.ObtainUserInput()
+                        includesName = self.IncludesName(userInput)
+                        # Ask for name again if not provided or not recognized in response
+                        if not includesName:
+                            yield self.OutputResponse("I'm sorry, I didn't catch your name. Could you kindly provide your name again?")
+                            name = yield self.ObtainUserInput()
+                        else:
+                            name = includesName.split(": ")[1] # includesName() is not reliable enough to use here (since some names are not recognized as names by the model)
                     else:
                         name = includesName.split(": ")[1]
                     yield self.OutputResponse("Thank you! Can you confirm your name is " + name + "?")
@@ -484,7 +538,7 @@ class ManagerLLM:
                     yield self.OutputResponse("Invalid pincode. Please provide a valid 4 digit pincode.")
                     pincode = yield self.ObtainUserInput()
                 # Confirm pincode
-                yield self.OutputResponse("Thank you! can you confirm your pincode is " + self.clientPincode + "?")
+                yield self.OutputResponse("Thank you! Can you confirm your pincode is " + self.clientPincode + "?")
                 userInput = yield self.ObtainUserInput()
                 # Loop until pincode is confirmed
                 while not self.IsAffirmative(userInput):
@@ -499,16 +553,19 @@ class ManagerLLM:
                 yield self.OutputResponse("Great! I have saved your pincode, " + self.clientName + ". Let's get started! What can I help you with today?")
 
         # Conversation loop using LLM responses
-        OutputDebug("start conversation loop")
+        OutputDebug("start personalized conversation loop")
         while True:
             userInput = yield self.ObtainUserInput()
             response = self.GenerateAnswer(userInput)
             if '<stop>' in response:
                 response = response.split('<stop>')[0]
                 yield self.OutputResponse(response)
-                if permission:
-                    self.SaveConversation(True)
                 yield self.OutputResponse("Session over.")
+                yield self.robotSession.call("ridk.fitbot.SetStatus", "Offline", False)
+                if (new and permission) or (not new and not nameFound):
+                    self.SaveConversation(True)
+                elif not new and nameFound:
+                    self.SaveConversation(False)
                 break
             yield self.OutputResponse(response)
             
